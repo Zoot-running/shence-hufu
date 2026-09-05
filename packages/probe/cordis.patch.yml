@@ -1,0 +1,4 @@
+# @shence/hufu-probe 插件入口
+- insert:
+    - id: shence-hufu-probe
+      name: '@shence/hufu-probe'

@@ -20,10 +20,12 @@ export type WorkState =
 export interface WorkItem {
   /** 稳定唯一标识。 */
   readonly id: string
-  /** 人读标签。 */
+  /** 人读标签（亦作为派单 prompt 正文；宿主绑定可定制渲染）。 */
   readonly label: string
   /** 派单排序提示：tier 升序、score 降序（缺省按加入顺序）。 */
   readonly priority?: { readonly tier: number; readonly score: number }
+  /** 可选：按次指定模型（经集思通道时生效）。 */
+  readonly model?: string
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */

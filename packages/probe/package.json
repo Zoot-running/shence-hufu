@@ -1,0 +1,23 @@
+{
+  "name": "@shence/hufu-probe",
+  "version": "0.1.0",
+  "description": "虎符 L1 集成探针（仅测试用）：注册 hufu_probe 工具，跑一场 2 工作项迷你战役",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --packages=external --outfile=lib/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
