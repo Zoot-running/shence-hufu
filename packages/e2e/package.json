@@ -1,0 +1,23 @@
+{
+  "name": "@shence/hufu-e2e",
+  "version": "0.1.0",
+  "description": "神策 L2 端到端合练探针（仅测试用）：虎符战役 × 集思通道 × 真实模型，含失败重试与恢复重放",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --packages=external --outfile=lib/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

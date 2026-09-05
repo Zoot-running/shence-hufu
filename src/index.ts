@@ -7,6 +7,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createHufuService } from './binding.ts'
 
+export { HufuCampaign } from './campaign.ts'
+export { HufuLedger } from './ledger.ts'
+export { InvalidTransitionError, isActive, isTerminal, transition } from './state-machine.ts'
+export type * from './types.ts'
+
 export const name = 'shence-hufu'
 export const inject = ['subagents']
 

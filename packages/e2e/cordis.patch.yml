@@ -1,0 +1,4 @@
+# @shence/hufu-e2e 插件入口
+- insert:
+    - id: shence-hufu-e2e
+      name: '@shence/hufu-e2e'
