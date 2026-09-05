@@ -92,10 +92,12 @@ export class HufuLedger {
     const facts: SeedFacts = {}
     let seed = 1
     let redispatchRequested = false
+    let terminalDetail: string | undefined
     for (const event of list) {
       if (event.type === 'dispatch') {
         seed = event.seed
         facts.dispatchedAt = event.at
+        terminalDetail = undefined
       } else if (event.type === 'progress') {
         facts.lastProgressAt = event.at
       } else if (event.type === 'supersede') {
@@ -103,6 +105,9 @@ export class HufuLedger {
       } else if (event.type === 'requeue') {
         seed = event.seed // 新 seed（重派）
         redispatchRequested = false
+        terminalDetail = undefined
+      } else if (event.type === 'terminal' && event.seed === seed) {
+        terminalDetail = event.detail
       }
     }
     return {
@@ -112,6 +117,7 @@ export class HufuLedger {
       dispatchedAt: facts.dispatchedAt,
       lastProgressAt: facts.lastProgressAt,
       redispatchRequested,
+      terminalDetail,
     }
   }
 

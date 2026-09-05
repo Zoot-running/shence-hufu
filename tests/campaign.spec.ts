@@ -68,8 +68,20 @@ describe('HufuLedger', () => {
     ledger.register(ITEM('a'))
     ledger.append('a', { type: 'dispatch', at: 0, seed: 1 })
     ledger.append('a', { type: 'progress', at: 5, seed: 1 })
-    ledger.append('a', { type: 'terminal', at: 10, seed: 1, kind: 'done' })
+    ledger.append('a', { type: 'terminal', at: 10, seed: 1, kind: 'done', detail: 'flag{abc}' })
     expect(ledger.view('a')!.state).toBe('done')
+    expect(ledger.view('a')!.terminalDetail).toBe('flag{abc}')
+  })
+  it('requeue clears stale terminal detail', () => {
+    const ledger = new HufuLedger()
+    ledger.register(ITEM('a'))
+    ledger.append('a', { type: 'dispatch', at: 0, seed: 1 })
+    ledger.append('a', { type: 'terminal', at: 10, seed: 1, kind: 'done', detail: 'old' })
+    ledger.append('a', { type: 'requeue', at: 20, seed: 2, reason: 'retry' })
+    const view = ledger.view('a')!
+    expect(view.state).toBe('queued')
+    expect(view.seed).toBe(2)
+    expect(view.terminalDetail).toBeUndefined()
   })
   it('superseded old seed absorbs late terminal report', () => {
     const ledger = new HufuLedger()
@@ -113,6 +125,15 @@ describe('HufuCampaign', () => {
     expect(dispatch.dispatch).toHaveBeenNthCalledWith(1, ITEM('easy4', { tier: 0, score: 300 }), 1)
     expect(dispatch.dispatch).toHaveBeenNthCalledWith(2, ITEM('easy2', { tier: 0, score: 200 }), 1)
     tick(1)
+  })
+  it('passes per-item model and reasoningEffort to the dispatch port', async () => {
+    const { campaign, dispatch } = makeCampaign({ concurrency: 1 })
+    campaign.add({ id: 'w1', label: 'p', model: 'glm-4.6', reasoningEffort: 'max', priority: { tier: 0, score: 1 } })
+    await campaign.dispatchNext()
+    const [item, seed] = dispatch.dispatch.mock.calls[0]!
+    expect(item.model).toBe('glm-4.6')
+    expect(item.reasoningEffort).toBe('max')
+    expect(seed).toBe(1)
   })
   it('respects concurrency cap', async () => {
     const { campaign } = makeCampaign({ concurrency: 1 })

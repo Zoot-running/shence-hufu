@@ -26,6 +26,8 @@ export interface WorkItem {
   readonly priority?: { readonly tier: number; readonly score: number }
   /** 可选：按次指定模型（经集思通道时生效）。 */
   readonly model?: string
+  /** 可选：按次指定思考强度（off/low/high/max 等，adapter 自有语义）。 */
+  readonly reasoningEffort?: string
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */
@@ -40,6 +42,8 @@ export interface WorkView {
   readonly lastProgressAt?: number
   /** stall 后是否已触发重派。 */
   readonly redispatchRequested: boolean
+  /** 当前 seed 终态报告的详情（求解输出等，宿主绑定写入）。 */
+  readonly terminalDetail?: string
 }
 
 /** 账本事件（追加日志，恢复 = 重放）。 */

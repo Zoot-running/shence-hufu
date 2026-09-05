@@ -16,6 +16,7 @@ interface JisiLike {
   delegate(parent: Agent, work: { prompt: string }, opts?: {
     model?: string
     provider?: string
+    reasoningEffort?: string
     background?: boolean
   }): { report: Promise<{ status: 'completed' | 'failed' | 'blocked'; text: string }> }
 }
@@ -44,7 +45,7 @@ export function createHostPorts(
     if (campaign === undefined) return
     const kind = report.status === 'completed' ? 'done' as const : 'failed' as const
     try {
-      campaign.report(item.id, kind, report.text.slice(0, 200))
+      campaign.report(item.id, kind, report.text.slice(0, 65_536))
     } catch {
       // 账本终态冲突（superseded/重复）：吸收。
     }
@@ -53,7 +54,11 @@ export function createHostPorts(
   const dispatch: DispatchPort = {
     async dispatch(item, _seed) {
       const work = { prompt: item.label }
-      const opts = item.model !== undefined ? { model: item.model, background: false } : { background: false }
+      const opts = {
+        background: false as const,
+        ...(item.model !== undefined ? { model: item.model } : {}),
+        ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
+      }
       if (jisi !== undefined) {
         const result = jisi.delegate(agent, work, opts)
         void result.report.then(report => feed(item, report))
@@ -65,7 +70,12 @@ export function createHostPorts(
         prompt: [{ type: 'text', text: item.label }] as ContentBlock[],
         parent: agent,
         signal: new AbortController().signal,
-        ...(item.model !== undefined ? { agentOptions: { model: item.model } } : {}),
+        ...(item.model !== undefined || item.reasoningEffort !== undefined ? {
+          agentOptions: {
+            ...(item.model !== undefined ? { model: item.model } : {}),
+            ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
+          },
+        } : {}),
       })
       void run.then(async (r) => {
         const result = await r.result
