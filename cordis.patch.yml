@@ -1,0 +1,4 @@
+# @shence/hufu 插件入口（bundle 补丁：insert 新条目）
+- insert:
+    - id: shence-hufu
+      name: '@shence/hufu'
