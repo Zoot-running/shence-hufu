@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { InvalidTransitionError, isActive, isTerminal, transition } from '../src/state-machine.ts'
 import { HufuLedger } from '../src/ledger.ts'
 import { HufuCampaign } from '../src/campaign.ts'
+import { CampaignRegistry } from '../src/registry.ts'
 import type { CampaignConfig, WorkItem } from '../src/types.ts'
 
 const ITEM = (id: string, priority?: { tier: number; score: number }): WorkItem => ({ id, label: id, priority })
@@ -269,5 +270,18 @@ describe('HufuCampaign', () => {
     expect(restored.ledger.view('a')!.state).toBe('dispatched')
     expect(restored.ledger.view('b')!.state).toBe('queued')
     expect(restored.open()).toHaveLength(1)
+  })
+})
+
+describe('CampaignRegistry', () => {
+  it('registers, gets, lists, and dedupes collect deliveries', () => {
+    const registry = new CampaignRegistry<object>()
+    const a = registry.register({ name: 'a' })
+    const b = registry.register({ name: 'b' })
+    expect(registry.get(a)).toEqual({ name: 'a' })
+    expect(registry.ids()).toEqual([a, b])
+    expect(registry.markDelivered(a, 'i1')).toBe(true)
+    expect(registry.markDelivered(a, 'i1')).toBe(false)
+    expect(registry.markDelivered(a, 'i2')).toBe(true)
   })
 })

@@ -34,7 +34,7 @@ export function apply(ctx: Context): void {
         { id: 'w3', label: '请只回复一个单词：PONG', model: 'kimi-k2.6', priority: { tier: 0, score: 200 } },
         { id: 'w4', label: '请只回复一个单词：PONG', model: 'glm-4.5-air', priority: { tier: 2, score: 900 } },
       ]
-      const campaign = ctx.hufu.createCampaign(agent, config, items)
+      const campaign = ctx.hufu.createCampaign(agent, config, items).campaign
 
       // 第一波：按槽位派单。
       while (campaign.freeSlots() > 0 && campaign.nextQueued().length > 0) {

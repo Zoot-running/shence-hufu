@@ -24,7 +24,7 @@ function apply(ctx) {
         { id: "w3", label: "\u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A\u5355\u8BCD\uFF1APONG", model: "kimi-k2.6", priority: { tier: 0, score: 200 } },
         { id: "w4", label: "\u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A\u5355\u8BCD\uFF1APONG", model: "glm-4.5-air", priority: { tier: 2, score: 900 } }
       ];
-      const campaign = ctx.hufu.createCampaign(agent, config, items);
+      const campaign = ctx.hufu.createCampaign(agent, config, items).campaign;
       while (campaign.freeSlots() > 0 && campaign.nextQueued().length > 0) {
         await campaign.dispatchNext();
       }

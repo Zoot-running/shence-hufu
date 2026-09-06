@@ -12,6 +12,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { settleRun } from '@deepseek-ai/dsh-subagent'
 import { HufuCampaign } from './campaign.ts'
+import { CampaignRegistry } from './registry.ts'
 import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, WorkItem } from './types.ts'
 
 interface JisiLike {
@@ -112,10 +113,33 @@ export function createHostPorts(
 
 /** ctx.hufu 服务面。 */
 export interface HufuService {
-  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[]): HufuCampaign
+  /** 创建并注册战役；返回 id + 战役对象。 */
+  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[]): { id: string; campaign: HufuCampaign }
+  /** 按 id 取战役（编程消费方：runner 等）。 */
+  get(id: string): HufuCampaign | undefined
+  /** 全部战役 id。 */
+  ids(): string[]
+  /** 入队一个工作项（模型/思考强度/依赖/共享板都在这里——调度语义归虎符）。 */
+  enqueue(id: string, item: WorkItem): string
+  /** 派发全部就绪排队项（槽位空闲即派，永不空等），返回派发数。 */
+  dispatch(id: string): Promise<number>
+  /** 收终态（交付去重）：已结算工作项的 id/状态/模型/详情。 */
+  collect(id: string): Array<{ itemId: string; state: string; model?: string; detail?: string }>
+  /** 剪枝：撤销排队/在途项。 */
+  cancel(id: string, itemId: string, reason: string): void
+  /** 战役状态摘要。 */
+  status(id: string): { open: number; queued: number; done: number; failed: number; blocked: number }
+  /** 共享板路径。 */
+  boardPath(id: string, group: string): string
 }
 
 export function createHufuService(ctx: Context, subagentProvider: string): HufuService {
+  const registry = new CampaignRegistry<HufuCampaign>()
+  const require = (id: string): HufuCampaign => {
+    const campaign = registry.get(id)
+    if (campaign === undefined) throw new Error(`hufu: unknown campaign "${id}"`)
+    return campaign
+  }
   return {
     createCampaign(agent, config, items) {
       const holder: CampaignHolder = {}
@@ -126,7 +150,53 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       })
       holder.campaign = campaign
       for (const item of items) campaign.add(item)
-      return campaign
+      const id = registry.register(campaign)
+      return { id, campaign }
     },
+    get: id => registry.get(id),
+    ids: () => registry.ids(),
+    enqueue(id, item) {
+      require(id).add(item)
+      return item.id
+    },
+    async dispatch(id) {
+      const campaign = require(id)
+      let count = 0
+      while (campaign.freeSlots() > 0 && campaign.nextQueued().length > 0) {
+        await campaign.dispatchNext()
+        count += 1
+      }
+      return count
+    },
+    collect(id) {
+      const campaign = require(id)
+      const out: Array<{ itemId: string; state: string; model?: string; detail?: string }> = []
+      for (const view of campaign.ledger.views()) {
+        if (view.state !== 'done' && view.state !== 'failed' && view.state !== 'blocked') continue
+        if (!registry.markDelivered(id, view.item.id)) continue
+        out.push({
+          itemId: view.item.id,
+          state: view.state,
+          model: view.item.model,
+          detail: view.terminalDetail,
+        })
+      }
+      return out
+    },
+    cancel(id, itemId, reason) {
+      require(id).cancel(itemId, reason)
+    },
+    status(id) {
+      const views = require(id).ledger.views()
+      const count = (fn: (state: string) => boolean): number => views.filter(v => fn(v.state)).length
+      return {
+        open: count(s => s === 'dispatched' || s === 'help' || s === 'stalled'),
+        queued: count(s => s === 'queued'),
+        done: count(s => s === 'done'),
+        failed: count(s => s === 'failed'),
+        blocked: count(s => s === 'blocked'),
+      }
+    },
+    boardPath: (id, group) => require(id).boardPath(group),
   }
 }
