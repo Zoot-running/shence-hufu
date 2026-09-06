@@ -20,7 +20,7 @@
 
 - 依赖（软）：[shence-jisi](https://github.com/Zoot-running/shence-jisi) 派单通道
 - 被监督：[shence-jintuo](https://github.com/Zoot-running/shence-jintuo)（进程级恢复；本仓负责调度级恢复）
-- 文档：[shence-docs](https://github.com/Zoot-running/shence-docs)
+- 文档：[shence-junji](https://github.com/Zoot-running/shence-junji)
 
 ## 实现状态
 
