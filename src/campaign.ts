@@ -106,6 +106,14 @@ export class HufuCampaign {
     this.ledger.append(itemId, { type: 'terminal', at: this.ports.now(), seed: view.seed, kind, detail })
   }
 
+  /** 剪枝：撤销排队/在途项（同题已破、思路废弃等）→ blocked 终态，释放槽位与队列。 */
+  cancel(itemId: string, reason: string): void {
+    const view = this.ledger.view(itemId)
+    if (view === undefined) throw new Error(`hufu: unknown work item "${itemId}"`)
+    if (isTerminal(view.state)) return // 已终态：幂等吸收
+    this.ledger.append(itemId, { type: 'cancel', at: this.ports.now(), seed: view.seed, reason })
+  }
+
   /**
    * stall 检测：超过 stallAfterMs 无进展 → 标记 stall；
    * 若 redispatchRequested 为假 → supersede + requeue（seed+1），并中断旧 seed。

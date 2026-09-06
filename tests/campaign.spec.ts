@@ -48,6 +48,15 @@ describe('state-machine.transition', () => {
       expect(transition(from, { type: 'requeue', at: 5, seed: 2, reason: 'r' })).toBe('queued')
     }
   })
+  it('cancel prunes queued and in-flight items to blocked', () => {
+    expect(transition('queued', { type: 'cancel', at: 1, seed: 1, reason: 'x' })).toBe('blocked')
+    expect(transition('dispatched', { type: 'cancel', at: 1, seed: 1, reason: 'x' })).toBe('blocked')
+    expect(transition('help', { type: 'cancel', at: 1, seed: 1, reason: 'x' })).toBe('blocked')
+    expect(transition('stalled', { type: 'cancel', at: 1, seed: 1, reason: 'x' })).toBe('blocked')
+  })
+  it('cancel is idempotent on terminal states', () => {
+    expect(() => transition('done', { type: 'cancel', at: 1, seed: 1, reason: 'x' })).toThrow(InvalidTransitionError)
+  })
   it('invalid transitions throw', () => {
     expect(() => transition('queued', { type: 'progress', at: 1, seed: 1 })).toThrow(InvalidTransitionError)
     expect(() => transition('done', { type: 'dispatch', at: 1, seed: 2 })).toThrow(InvalidTransitionError)
@@ -112,6 +121,24 @@ describe('HufuLedger', () => {
 })
 
 describe('HufuCampaign', () => {
+  it('cancel prunes a queued item and frees the queue', async () => {
+    const { campaign } = makeCampaign({ concurrency: 1 })
+    campaign.add(ITEM('a'))
+    campaign.cancel('a', 'superseded by a completed sibling')
+    expect(campaign.ledger.view('a')!.state).toBe('blocked')
+    expect(campaign.nextQueued()).toHaveLength(0)
+    expect(campaign.freeSlots()).toBe(1)
+  })
+  it('cancel on a terminal item is absorbed idempotently', async () => {
+    const { campaign, dispatch, tick } = makeCampaign({ concurrency: 1 })
+    campaign.add(ITEM('a'))
+    await campaign.dispatchNext()
+    tick(1)
+    campaign.report('a', 'done')
+    expect(() => campaign.cancel('a', 'late prune')).not.toThrow()
+    expect(campaign.ledger.view('a')!.state).toBe('done')
+    expect(dispatch.dispatch).toHaveBeenCalledTimes(1)
+  })
   it('dispatches in priority order within free slots', async () => {
     const { campaign, dispatch, tick } = makeCampaign({ concurrency: 2 })
     campaign.add(ITEM('hard1', { tier: 2, score: 900 }))

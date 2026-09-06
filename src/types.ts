@@ -55,6 +55,7 @@ export type LedgerEvent =
   | { readonly type: 'supersede'; readonly at: number; readonly seed: number; readonly reason: string }
   | { readonly type: 'terminal'; readonly at: number; readonly seed: number; readonly kind: WorkTerminal; readonly detail?: string }
   | { readonly type: 'requeue'; readonly at: number; readonly seed: number; readonly reason: string }
+  | { readonly type: 'cancel'; readonly at: number; readonly seed: number; readonly reason: string }
 
 /** 战役配置。 */
 export interface CampaignConfig {

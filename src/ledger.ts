@@ -31,11 +31,11 @@ export class HufuLedger {
     if (list === undefined) throw new Error(`hufu: unknown work item "${itemId}"`)
     const current = this.foldEvents(list)
     if (current === undefined) {
-      if (event.type === 'dispatch' || event.type === 'requeue') {
+      if (event.type === 'dispatch' || event.type === 'requeue' || event.type === 'cancel') {
         list.push(event)
         return
       }
-      throw new Error(`hufu: first event for "${itemId}" must be dispatch/requeue, got ${event.type}`)
+      throw new Error(`hufu: first event for "${itemId}" must be dispatch/requeue/cancel, got ${event.type}`)
     }
     // 新 seed 的 dispatch/requeue 重开状态，无需经 transition 校验。
     if ((event.type === 'dispatch' && event.seed > this.currentSeed(list)) || event.type === 'requeue') {
@@ -55,10 +55,10 @@ export class HufuLedger {
     return seed
   }
 
-  /** 显式事件折叠（首事件 dispatch→dispatched；requeue→queued；新 seed 重开；旧 seed 事件吸收）。 */
+  /** 显式事件折叠（首事件 dispatch→dispatched；cancel→blocked；requeue→queued；新 seed 重开；旧 seed 事件吸收）。 */
   private foldEvents(list: readonly LedgerEvent[]): WorkState | undefined {
     if (list.length === 0) return undefined
-    let state: WorkState = list[0]!.type === 'dispatch' ? 'dispatched' : 'queued'
+    let state: WorkState = list[0]!.type === 'dispatch' ? 'dispatched' : list[0]!.type === 'cancel' ? 'blocked' : 'queued'
     let seed = list[0]!.seed
     for (let i = 1; i < list.length; i++) {
       const event = list[i]!

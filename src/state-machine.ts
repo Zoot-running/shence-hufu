@@ -39,6 +39,11 @@ export function transition(state: WorkState, event: LedgerEvent): WorkState {
     case 'requeue':
       if (state === 'stalled' || state === 'failed' || state === 'blocked' || state === 'superseded') return 'queued'
       break
+    case 'cancel':
+      // 剪枝：调度者撤销排队/在途项（同题已破、思路废弃等）；在途项记 blocked。
+      if (state === 'queued') return 'blocked'
+      if (state === 'dispatched' || state === 'help' || state === 'stalled') return 'blocked'
+      break
     default:
       break
   }
