@@ -6,12 +6,13 @@
 
 import { InvalidTransitionError, isActive, isTerminal } from './state-machine.ts'
 import { HufuLedger } from './ledger.ts'
-import type { CampaignConfig, DispatchPort, InterruptPort, LedgerEvent, WorkItem, WorkView } from './types.ts'
+import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, LedgerEvent, WorkItem, WorkView } from './types.ts'
 
 export interface CampaignPorts {
   now(): number
   dispatch: DispatchPort
   interrupt: InterruptPort
+  board: BoardPort
 }
 
 /** 队列排序：priority.tier 升序 → score 降序 → 注册顺序稳定。 */
@@ -40,9 +41,23 @@ export class HufuCampaign {
     this.ledger.register(item)
   }
 
-  /** 可派单的排队项（按优先级排序）。 */
+  /** 可派单的排队项：依赖全部终态（图状事务就绪）后按优先级排序。 */
   nextQueued(): WorkView[] {
-    return this.ledger.queued().sort(byPriority)
+    return this.ledger.queued().filter(v => this.dependenciesSatisfied(v)).sort(byPriority)
+  }
+
+  /** 依赖判定：未知依赖视为已满足（防御死锁），否则必须全部终态。 */
+  dependenciesSatisfied(view: WorkView): boolean {
+    const depends = view.item.dependsOn ?? []
+    return depends.every(id => {
+      const dep = this.ledger.view(id)
+      return dep === undefined || isTerminal(dep.state)
+    })
+  }
+
+  /** 共享板路径（并行工人互相联系的泛化信道；宿主绑定实现）。 */
+  boardPath(group: string): string {
+    return this.ports.board.pathOf(group)
   }
 
   /** 活跃项（占用槽位）。 */

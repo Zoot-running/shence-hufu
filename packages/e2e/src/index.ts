@@ -46,6 +46,7 @@ export function apply(ctx: Context): void {
         now: () => Date.now(),
         dispatch: { dispatch: async () => {} },
         interrupt: { interrupt: async () => {} },
+        board: { pathOf: group => `/boards/${group}/FINDINGS.md` },
       })
       const replayOk = restored.ledger.views().every(v => {
         const original = campaign.ledger.view(v.item.id)

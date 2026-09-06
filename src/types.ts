@@ -28,6 +28,10 @@ export interface WorkItem {
   readonly model?: string
   /** 可选：按次指定思考强度（off/low/high/max 等，adapter 自有语义）。 */
   readonly reasoningEffort?: string
+  /** 可选：图状事务依赖——依赖项全部终态（done/failed/blocked/superseded）才可派单。 */
+  readonly dependsOn?: readonly string[]
+  /** 可选：共享板组名（并行工人互相联系的泛化信道，宿主绑定提供路径）。 */
+  readonly board?: string
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */
@@ -67,6 +71,12 @@ export interface CampaignConfig {
   heartbeatMs: number
   /** 可选战役预算（毫秒）；到期后 remaining 视为停止派单。 */
   budgetMs?: number
+}
+
+/** 共享板端口：并行工人互相联系的泛化信道（宿主绑定给出路径；工人自行读写文件）。 */
+export interface BoardPort {
+  /** 组名 → 战报文件路径（宿主绑定负责目录就绪）。 */
+  pathOf(group: string): string
 }
 
 /** 派单端口：宿主把工作派给求解代理（经集思通道或 DSH 原生 subagent）。 */

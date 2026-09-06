@@ -13,11 +13,12 @@ function makeCampaign(config: Partial<CampaignConfig> = {}) {
   let now = 0
   const dispatch = vi.fn(async () => {})
   const interrupt = vi.fn(async () => {})
+  const board = { pathOf: (group: string) => `/boards/${group}/FINDINGS.md` }
   const campaign = new HufuCampaign(
     { concurrency: config.concurrency ?? 2, stallAfterMs: config.stallAfterMs ?? 1000, heartbeatMs: config.heartbeatMs ?? 90_000, budgetMs: config.budgetMs },
-    { now: () => now, dispatch: { dispatch }, interrupt: { interrupt } },
+    { now: () => now, dispatch: { dispatch }, interrupt: { interrupt }, board },
   )
-  return { campaign, dispatch: { dispatch }, interrupt: { interrupt }, tick: (ms: number) => { now += ms } }
+  return { campaign, dispatch: { dispatch }, interrupt: { interrupt }, board, tick: (ms: number) => { now += ms } }
 }
 
 describe('state-machine.transition', () => {
@@ -138,6 +139,48 @@ describe('HufuCampaign', () => {
     expect(() => campaign.cancel('a', 'late prune')).not.toThrow()
     expect(campaign.ledger.view('a')!.state).toBe('done')
     expect(dispatch.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('DAG: dependents stay queued until dependencies reach a terminal state', async () => {
+    const { campaign, dispatch, tick } = makeCampaign({ concurrency: 2 })
+    campaign.add(ITEM('a'))
+    campaign.add({ ...ITEM('b'), dependsOn: ['a'] })
+    await campaign.dispatchNext()
+    tick(1)
+    // a 在跑，b 依赖未满足 → 不可派
+    expect(campaign.nextQueued()).toHaveLength(0)
+    expect(dispatch.dispatch).toHaveBeenCalledTimes(1)
+    campaign.report('a', 'done')
+    // a 终态 → b 就绪可派
+    await campaign.dispatchNext()
+    expect(dispatch.dispatch).toHaveBeenNthCalledWith(2, { ...ITEM('b'), dependsOn: ['a'] }, 1)
+  })
+  it('DAG: multiple trees run in parallel within free slots', async () => {
+    const { campaign, dispatch, tick } = makeCampaign({ concurrency: 4 })
+    campaign.add(ITEM('root1'))
+    campaign.add(ITEM('root2'))
+    campaign.add({ ...ITEM('leaf1'), dependsOn: ['root1'] })
+    campaign.add({ ...ITEM('leaf2'), dependsOn: ['root2'] })
+    await campaign.dispatchNext()
+    await campaign.dispatchNext()
+    expect(dispatch.dispatch).toHaveBeenCalledTimes(2)
+    tick(1)
+    campaign.report('root1', 'done')
+    campaign.report('root2', 'failed')
+    await campaign.dispatchNext()
+    await campaign.dispatchNext()
+    // 两棵树各自的叶子都就绪（root2 判负也满足"终态"语义）
+    expect(dispatch.dispatch).toHaveBeenCalledTimes(4)
+  })
+  it('unknown dependency ids are treated as satisfied (no deadlock)', async () => {
+    const { campaign, dispatch } = makeCampaign({ concurrency: 1 })
+    campaign.add({ ...ITEM('b'), dependsOn: ['nonexistent'] })
+    await campaign.dispatchNext()
+    expect(dispatch.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('boardPath relays the host board port per group', () => {
+    const { campaign, board } = makeCampaign()
+    expect(campaign.boardPath('g-18')).toBe('/boards/g-18/FINDINGS.md')
+    void board
   })
   it('dispatches in priority order within free slots', async () => {
     const { campaign, dispatch, tick } = makeCampaign({ concurrency: 2 })

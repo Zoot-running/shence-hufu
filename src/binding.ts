@@ -8,9 +8,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { settleRun } from '@deepseek-ai/dsh-subagent'
 import { HufuCampaign } from './campaign.ts'
-import type { CampaignConfig, DispatchPort, InterruptPort, WorkItem } from './types.ts'
+import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, WorkItem } from './types.ts'
 
 interface JisiLike {
   delegate(parent: Agent, work: { prompt: string }, opts?: {
@@ -96,7 +98,16 @@ export function createHostPorts(
     },
   }
 
-  return { dispatch, interrupt }
+  const board: BoardPort = {
+    pathOf(group) {
+      const safe = group.replace(/[^A-Za-z0-9._-]/g, '_')
+      const dir = join(process.cwd(), 'boards', safe)
+      mkdirSync(dir, { recursive: true })
+      return join(dir, 'FINDINGS.md')
+    },
+  }
+
+  return { dispatch, interrupt, board }
 }
 
 /** ctx.hufu 服务面。 */
