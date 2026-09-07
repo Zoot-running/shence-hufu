@@ -69,12 +69,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       effort: { type: 'string', description: 'Per-item reasoning effort (off/low/high/max; unsupported efforts are dropped).' },
       dependsOn: { type: 'array', description: 'Item ids to wait for (DAG).' },
       board: { type: 'string', description: 'Shared board group (workers coordinate through hufu_board).' },
+      continuable: { type: 'boolean', description: 'Continuable executor: the same subagent keeps its context across rounds (report its outcome explicitly via hufu_report when you judge it settled).' },
       tier: { type: 'number', description: 'Priority tier (lower first).' },
       score: { type: 'number', description: 'Priority score (higher first within tier).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
     isConcurrencySafe: () => false,
-    async execute(args: { campaignId: string; prompt: string; model?: string; effort?: string; dependsOn?: string[]; board?: string; tier?: number; score?: number }) {
+    async execute(args: { campaignId: string; prompt: string; model?: string; effort?: string; dependsOn?: string[]; board?: string; continuable?: boolean; tier?: number; score?: number }) {
       const itemId = `item-${Date.now()}-${Math.floor(Math.random() * 10000)}`
       service.enqueue(args.campaignId, {
         id: itemId,
@@ -83,6 +84,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(args.effort !== undefined ? { reasoningEffort: args.effort } : {}),
         ...(args.dependsOn !== undefined && args.dependsOn.length > 0 ? { dependsOn: args.dependsOn } : {}),
         ...(args.board !== undefined ? { board: args.board } : {}),
+        ...(args.continuable === true ? { continuable: true } : {}),
         ...(args.tier !== undefined || args.score !== undefined
           ? { priority: { tier: args.tier ?? 0, score: args.score ?? 0 } }
           : {}),
@@ -129,6 +131,42 @@ export function apply(ctx: Context, config: Config = {}): void {
     async execute(args: { campaignId: string; itemId: string; reason?: string }) {
       service.cancel(args.campaignId, args.itemId, args.reason ?? 'cancelled')
       return `cancelled ${args.itemId}`
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'hufu_report',
+    description: 'Report your judgment for a work item (done/failed/blocked) — the settlement entry for continuable executors: when you see the child settle in your session, judge the outcome and record it here.',
+    parameters: {
+      campaignId: { type: 'string', required: true },
+      itemId: { type: 'string', required: true },
+      kind: { type: 'string', required: true, description: 'done | failed | blocked' },
+      detail: { type: 'string', description: 'Outcome detail (logs into the ledger).' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
+    isConcurrencySafe: () => false,
+    async execute(args: { campaignId: string; itemId: string; kind: string; detail?: string }) {
+      if (args.kind !== 'done' && args.kind !== 'failed' && args.kind !== 'blocked') {
+        return 'hufu_report: kind must be done | failed | blocked'
+      }
+      service.report(args.campaignId, args.itemId, args.kind, args.detail)
+      return `reported ${args.itemId} → ${args.kind}`
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'hufu_continue',
+    description: 'Send a follow-up message to a continuable executor (same child, native context preserved) — the grind-continuity primitive: instead of respawning from scratch, steer the existing worker with new findings or the next step.',
+    parameters: {
+      campaignId: { type: 'string', required: true },
+      itemId: { type: 'string', required: true },
+      message: { type: 'string', required: true, description: 'The follow-up steering message.' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
+    isConcurrencySafe: () => false,
+    async execute(args: { campaignId: string; itemId: string; message: string }) {
+      await service.continue(args.campaignId, args.itemId, args.message)
+      return `message delivered to ${args.itemId}`
     },
   }))
 

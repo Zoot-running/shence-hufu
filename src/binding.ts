@@ -21,7 +21,8 @@ interface JisiLike {
     provider?: string
     reasoningEffort?: string
     background?: boolean
-  }): { report: Promise<{ status: 'completed' | 'failed' | 'blocked'; text: string }> }
+  }): { ref: { id: string }; report: Promise<{ status: 'completed' | 'failed' | 'blocked'; text: string }> }
+  continue(parent: Agent, childId: string, message: string): Promise<void>
 }
 
 function textOfBlocks(output: readonly ContentBlock[] | undefined): string {
@@ -40,8 +41,9 @@ export function createHostPorts(
   agent: Agent,
   holder: CampaignHolder,
   subagentProvider: string,
-): { dispatch: DispatchPort; interrupt: InterruptPort } {
-  const jisi = (ctx as unknown as { get?: (name: string) => unknown }).get?.('jisi') as JisiLike | undefined
+  jisi: JisiLike | undefined,
+): { dispatch: DispatchPort; interrupt: InterruptPort; continuables: Map<string, { childId: string; parent: Agent }> } {
+  const continuables = new Map<string, { childId: string; parent: Agent }>()
 
   const feed = (item: WorkItem, report: { status: string; text: string }): void => {
     const campaign = holder.campaign
@@ -63,6 +65,16 @@ export function createHostPorts(
         ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
       }
       if (jisi !== undefined) {
+        // continuable 执行者：后台派单（子代理跨轮续战）；终态由调用方（主 agent）显式 report。
+        if (item.continuable === true) {
+          const result = jisi.delegate(agent, work, { ...opts, background: true })
+          continuables.set(item.id, { childId: result.ref.id, parent: agent })
+          // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
+          void result.report.then(report => {
+            if (report.status === 'failed') feed(item, report)
+          })
+          return
+        }
         const result = jisi.delegate(agent, work, opts)
         void result.report.then(report => feed(item, report))
         return
@@ -108,7 +120,7 @@ export function createHostPorts(
     },
   }
 
-  return { dispatch, interrupt, board }
+  return { dispatch, interrupt, board, continuables }
 }
 
 /** ctx.hufu 服务面。 */
@@ -127,6 +139,10 @@ export interface HufuService {
   collect(id: string): Array<{ itemId: string; state: string; model?: string; detail?: string }>
   /** 剪枝：撤销排队/在途项。 */
   cancel(id: string, itemId: string, reason: string): void
+  /** 显式终态报告（continuable 执行者的结算入口：主 agent 判断后落账）。 */
+  report(id: string, itemId: string, kind: 'done' | 'failed' | 'blocked', detail?: string): void
+  /** 续聊 continuable 执行者（保留原生上下文跨轮续战）。 */
+  continue(id: string, itemId: string, message: string): Promise<void>
   /** 战役状态摘要。 */
   status(id: string): { open: number; queued: number; done: number; failed: number; blocked: number }
   /** 共享板路径。 */
@@ -134,7 +150,9 @@ export interface HufuService {
 }
 
 export function createHufuService(ctx: Context, subagentProvider: string): HufuService {
+  const jisi = (ctx as unknown as { get?: (name: string) => unknown }).get?.('jisi') as JisiLike | undefined
   const registry = new CampaignRegistry<HufuCampaign>()
+  const continuablesByCampaign = new Map<string, Map<string, { childId: string; parent: Agent }>>()
   const require = (id: string): HufuCampaign => {
     const campaign = registry.get(id)
     if (campaign === undefined) throw new Error(`hufu: unknown campaign "${id}"`)
@@ -143,7 +161,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
   return {
     createCampaign(agent, config, items) {
       const holder: CampaignHolder = {}
-      const ports = createHostPorts(ctx, agent, holder, subagentProvider)
+      const ports = createHostPorts(ctx, agent, holder, subagentProvider, jisi)
       const campaign = new HufuCampaign(config, {
         now: () => Date.now(),
         ...ports,
@@ -151,6 +169,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       holder.campaign = campaign
       for (const item of items) campaign.add(item)
       const id = registry.register(campaign)
+      continuablesByCampaign.set(id, ports.continuables)
       return { id, campaign }
     },
     get: id => registry.get(id),
@@ -185,6 +204,15 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
     },
     cancel(id, itemId, reason) {
       require(id).cancel(itemId, reason)
+    },
+    report(id, itemId, kind, detail) {
+      require(id).report(itemId, kind, detail)
+    },
+    async continue(id, itemId, message) {
+      const entry = continuablesByCampaign.get(id)?.get(itemId)
+      if (entry === undefined) throw new Error(`hufu: no continuable child for "${itemId}"`)
+      if (jisi === undefined) throw new Error('hufu: jisi channel required for continuable children')
+      await jisi.continue(entry.parent, entry.childId, message)
     },
     status(id) {
       const views = require(id).ledger.views()

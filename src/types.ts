@@ -32,6 +32,8 @@ export interface WorkItem {
   readonly dependsOn?: readonly string[]
   /** 可选：共享板组名（并行工人互相联系的泛化信道，宿主绑定提供路径）。 */
   readonly board?: string
+  /** 可选：continuable 执行者——同一子代理跨轮续战（保留原生上下文），终态由调用方显式 report。 */
+  readonly continuable?: boolean
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */
