@@ -20,7 +20,10 @@ export { InvalidTransitionError, isActive, isTerminal, transition } from './stat
 export type * from './types.ts'
 
 export const name = 'shence-hufu'
-export const inject = ['subagents', 'tools']
+// 依赖 jisi 服务：cordis 保证 jisi 先于本插件装载——hufu apply 时 ctx.get('jisi')
+// 不再可能拿到 undefined（F8 真正根因：插件顺序导致 hufu 永远走无 provider 回退分支，
+// 非默认模型被误送到父路由后静默死亡）。
+export const inject = ['subagents', 'tools', 'jisi']
 
 export interface Config {
   /** ctx.subagents 的 provider 名（默认 spawn）。 */

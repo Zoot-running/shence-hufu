@@ -62,16 +62,19 @@ export function createHostPorts(
 
   const dispatch: DispatchPort = {
     async dispatch(item, _seed) {
+      // F8 根治（惰性解析）：jisi 通道按派单时刻解析，避免插件装载顺序造成
+      // apply 时拿到 undefined 后永远走无 provider 回退（模型误送父路由）。
+      const jisiNow = jisi ?? (ctx as unknown as { get?: (name: string) => unknown }).get?.('jisi') as JisiLike | undefined
       const work = { prompt: item.label }
       const opts = {
         background: false as const,
         ...(item.model !== undefined ? { model: item.model } : {}),
         ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
       }
-      if (jisi !== undefined) {
+      if (jisiNow !== undefined) {
         // continuable 执行者：后台派单（子代理跨轮续战）；终态由调用方（主 agent）显式 report。
         if (item.continuable === true) {
-          const result = jisi.delegate(agent, work, { ...opts, background: true })
+          const result = jisiNow.delegate(agent, work, { ...opts, background: true })
           continuables.set(item.id, { childId: result.ref.id, parent: agent })
           // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
           void result.report.then(report => {
@@ -79,21 +82,23 @@ export function createHostPorts(
           })
           return
         }
-        const result = jisi.delegate(agent, work, opts)
+        const result = jisiNow.delegate(agent, work, opts)
         void result.report.then(report => feed(item, report))
         return
       }
-      // 回退：DSH 原生一次性子代理。
+      // 回退：DSH 原生一次性子代理。注意：无集思通道时按模型覆盖会误送父路由
+      // （provider 无法解析）——模型覆盖必须响亮失败而非盲派。
+      if (item.model !== undefined) {
+        feed(item, { status: 'failed', text: `[no-jisi-channel] 模型覆盖 ${item.model} 需要集思通道（jisi 未装载），拒绝盲派` })
+        return
+      }
       const run = ctx.subagents.start(subagentProvider, {
         label: `hufu-${item.id}`,
         prompt: [{ type: 'text', text: item.label }] as ContentBlock[],
         parent: agent,
         signal: new AbortController().signal,
-        ...(item.model !== undefined || item.reasoningEffort !== undefined ? {
-          agentOptions: {
-            ...(item.model !== undefined ? { model: item.model } : {}),
-            ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
-          },
+        ...(item.reasoningEffort !== undefined ? {
+          agentOptions: { reasoningEffort: item.reasoningEffort },
         } : {}),
       })
       void run.then(async (r) => {
