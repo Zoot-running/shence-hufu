@@ -44,6 +44,7 @@ export function createHostPorts(
   holder: CampaignHolder,
   subagentProvider: string,
   jisi: JisiLike | undefined,
+  boardNamespace?: string,
 ): { dispatch: DispatchPort; interrupt: InterruptPort; continuables: Map<string, { childId: string; parent: Agent }> } {
   const continuables = new Map<string, { childId: string; parent: Agent }>()
 
@@ -117,7 +118,9 @@ export function createHostPorts(
   const board: BoardPort = {
     pathOf(group) {
       const safe = group.replace(/[^A-Za-z0-9._-]/g, '_')
-      const dir = join(process.cwd(), 'boards', safe)
+      // boards 按战役命名空间隔离（F6 根治）：不同 run 的战报物理分开，跨 run 不再互见。
+      const ns = boardNamespace !== undefined && boardNamespace !== '' ? boardNamespace.replace(/[^A-Za-z0-9._-]/g, '_') : undefined
+      const dir = ns !== undefined ? join(process.cwd(), 'boards', ns, safe) : join(process.cwd(), 'boards', safe)
       mkdirSync(dir, { recursive: true })
       return join(dir, 'FINDINGS.md')
     },
@@ -131,8 +134,9 @@ export interface HufuService {
   /**
    * 创建（或幂等恢复）战役；返回 id + 战役对象。
    * opts.id 给稳定 id：同名快照存在则原样恢复（在途项重置回队列，prompt 不丢）。
+   * opts.boardNamespace 给战报目录命名空间（按 run 隔离）。
    */
-  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[], opts?: { id?: string }): { id: string; campaign: HufuCampaign }
+  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[], opts?: { id?: string; boardNamespace?: string }): { id: string; campaign: HufuCampaign }
   /** 按 id 取战役（编程消费方：runner 等）。 */
   get(id: string): HufuCampaign | undefined
   /** 全部战役 id。 */
@@ -183,7 +187,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
   return {
     createCampaign(agent, config, items, opts = {}) {
       const holder: CampaignHolder = {}
-      const ports = createHostPorts(ctx, agent, holder, subagentProvider, jisi)
+      const ports = createHostPorts(ctx, agent, holder, subagentProvider, jisi, opts.boardNamespace)
       let campaign: HufuCampaign
       let restored = false
       const id = opts.id ?? `campaign-${Date.now()}`

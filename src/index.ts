@@ -40,13 +40,14 @@ export function apply(ctx: Context, config: Config = {}): void {
       'Create a hufu campaign (parallel scheduling ledger) and return its id. Slots are unlimited by default — backpressure comes only from CPU/RAM/provider rate limits; work items dispatch as soon as they are ready (DAG dependencies satisfied) and a slot is free. Pass a stable id to make creation idempotent: a persisted snapshot under that id is restored (queued prompts intact, in-flight items reset for redispatch) — safe to call again after a crash/restart.',
     parameters: {
       id: { type: 'string', description: 'Stable campaign id (idempotent restore across restarts). Default: auto-generated.' },
+      boardNamespace: { type: 'string', description: 'Board directory namespace (isolates shared boards per run).' },
       concurrency: { type: 'number', description: 'Campaign slots. Default 999 (no artificial threshold).' },
       budgetMinutes: { type: 'number', description: 'Campaign wall-clock budget (stops dispatch after). Default 330.' },
       stallMinutes: { type: 'number', description: 'Stall threshold for in-flight items. Default 40.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
     isConcurrencySafe: () => false,
-    async execute(args: { id?: string; concurrency?: number; budgetMinutes?: number; stallMinutes?: number }, exec) {
+    async execute(args: { id?: string; boardNamespace?: string; concurrency?: number; budgetMinutes?: number; stallMinutes?: number }, exec) {
       const agent = exec.agent
       if (agent === undefined) throw new Error('hufu_campaign_create requires a calling agent')
       const { id } = service.createCampaign(agent, {
@@ -54,7 +55,10 @@ export function apply(ctx: Context, config: Config = {}): void {
         stallAfterMs: (args.stallMinutes ?? 40) * 60_000,
         heartbeatMs: 15 * 60_000,
         ...(args.budgetMinutes !== undefined ? { budgetMs: args.budgetMinutes * 60_000 } : {}),
-      }, [], args.id !== undefined ? { id: args.id } : {})
+      }, [], {
+        ...(args.id !== undefined ? { id: args.id } : {}),
+        ...(args.boardNamespace !== undefined ? { boardNamespace: args.boardNamespace } : {}),
+      })
       return `campaign created: ${id}`
     },
   }))
