@@ -37,15 +37,16 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.tools.register(defineTool({
     name: 'hufu_campaign_create',
     description:
-      'Create a hufu campaign (parallel scheduling ledger) and return its id. Slots are unlimited by default — backpressure comes only from CPU/RAM/provider rate limits; work items dispatch as soon as they are ready (DAG dependencies satisfied) and a slot is free.',
+      'Create a hufu campaign (parallel scheduling ledger) and return its id. Slots are unlimited by default — backpressure comes only from CPU/RAM/provider rate limits; work items dispatch as soon as they are ready (DAG dependencies satisfied) and a slot is free. Pass a stable id to make creation idempotent: a persisted snapshot under that id is restored (queued prompts intact, in-flight items reset for redispatch) — safe to call again after a crash/restart.',
     parameters: {
+      id: { type: 'string', description: 'Stable campaign id (idempotent restore across restarts). Default: auto-generated.' },
       concurrency: { type: 'number', description: 'Campaign slots. Default 999 (no artificial threshold).' },
       budgetMinutes: { type: 'number', description: 'Campaign wall-clock budget (stops dispatch after). Default 330.' },
       stallMinutes: { type: 'number', description: 'Stall threshold for in-flight items. Default 40.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
     isConcurrencySafe: () => false,
-    async execute(args: { concurrency?: number; budgetMinutes?: number; stallMinutes?: number }, exec) {
+    async execute(args: { id?: string; concurrency?: number; budgetMinutes?: number; stallMinutes?: number }, exec) {
       const agent = exec.agent
       if (agent === undefined) throw new Error('hufu_campaign_create requires a calling agent')
       const { id } = service.createCampaign(agent, {
@@ -53,7 +54,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         stallAfterMs: (args.stallMinutes ?? 40) * 60_000,
         heartbeatMs: 15 * 60_000,
         ...(args.budgetMinutes !== undefined ? { budgetMs: args.budgetMinutes * 60_000 } : {}),
-      }, [])
+      }, [], args.id !== undefined ? { id: args.id } : {})
       return `campaign created: ${id}`
     },
   }))
@@ -69,7 +70,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       effort: { type: 'string', description: 'Per-item reasoning effort (off/low/high/max; unsupported efforts are dropped).' },
       dependsOn: { type: 'array', description: 'Item ids to wait for (DAG).' },
       board: { type: 'string', description: 'Shared board group (workers coordinate through hufu_board).' },
-      continuable: { type: 'boolean', description: 'Continuable executor: the same subagent keeps its context across rounds (report its outcome explicitly via hufu_report when you judge it settled).' },
+      continuable: { type: 'boolean', description: 'Continuable executor: the same subagent keeps its context across rounds — prefer it for long or hard tasks, and for tasks already dispatched once without a useful result (respawn wastes the prior context). Report the outcome explicitly via hufu_report when you judge it settled, and steer it mid-way with hufu_continue.' },
       tier: { type: 'number', description: 'Priority tier (lower first).' },
       score: { type: 'number', description: 'Priority score (higher first within tier).' },
     },

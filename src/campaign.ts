@@ -191,15 +191,32 @@ export class HufuCampaign {
     }
   }
 
-  /** 恢复（重放账本）。 */
+  /** 恢复（重放账本）；resetOpen=true 时把非终态在途项重置回队列（进程重启后执行者已死）。 */
   static restore(
     data: ReturnType<HufuCampaign['serialize']>,
     ports: CampaignPorts,
+    opts: { resetOpen?: boolean } = {},
   ): HufuCampaign {
     const campaign = new HufuCampaign(data.config, ports)
     for (const item of data.items) campaign.ledger.register(item)
     for (const { itemId, events } of data.dump) {
       for (const event of events) campaign.ledger.append(itemId, event)
+    }
+    if (opts.resetOpen === true) {
+      // 恢复语义：上一进程的在途执行者已随进程消亡——supersede+requeue 重置
+      // （走 stallCheck 同款状态路径），新进程照常重派；prompt 本体不丢。
+      const now = ports.now()
+      for (const view of campaign.ledger.views()) {
+        if (isTerminal(view.state) || view.state === 'queued') continue
+        campaign.ledger.append(view.item.id, {
+          type: 'supersede', at: now, seed: view.seed,
+          reason: 'restored after process restart (in-flight executor lost)',
+        })
+        campaign.ledger.append(view.item.id, {
+          type: 'requeue', at: now, seed: view.seed + 1,
+          reason: 'requeue after restore',
+        })
+      }
     }
     return campaign
   }

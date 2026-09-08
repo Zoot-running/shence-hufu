@@ -16,12 +16,13 @@ export class CampaignRegistry<T> {
   private readonly delivered = new Map<string, Set<string>>()
   private seq = 0
 
-  register(campaign: T): string {
-    this.seq += 1
-    const id = `campaign-${this.seq}`
-    this.campaigns.set(id, campaign)
-    this.delivered.set(id, new Set())
-    return id
+  register(campaign: T, id?: string): string {
+    // 稳定 id（幂等恢复用）：调用方（runner 等）可指定；缺省自动编号。
+    const finalId = id ?? `campaign-${++this.seq}`
+    if (this.campaigns.has(finalId)) throw new Error(`hufu: campaign id "${finalId}" already registered`)
+    this.campaigns.set(finalId, campaign)
+    this.delivered.set(finalId, new Set())
+    return finalId
   }
 
   get(id: string): T | undefined {

@@ -8,7 +8,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { settleRun } from '@deepseek-ai/dsh-subagent'
 import { HufuCampaign } from './campaign.ts'
@@ -33,6 +33,8 @@ function textOfBlocks(output: readonly ContentBlock[] | undefined): string {
 /** 战役持有者（构造期间回填，供端口回调引用）。 */
 export interface CampaignHolder {
   campaign?: HufuCampaign
+  /** 账本变更后的持久化钩子（feed 异步结算也要落快照）。 */
+  mutated?: () => void
 }
 
 /** 构造宿主端口：派单经集思（无则 DSH 原生一次性子代理）。 */
@@ -51,6 +53,7 @@ export function createHostPorts(
     const kind = report.status === 'completed' ? 'done' as const : 'failed' as const
     try {
       campaign.report(item.id, kind, report.text.slice(0, 65_536))
+      holder.mutated?.()
     } catch {
       // 账本终态冲突（superseded/重复）：吸收。
     }
@@ -125,8 +128,11 @@ export function createHostPorts(
 
 /** ctx.hufu 服务面。 */
 export interface HufuService {
-  /** 创建并注册战役；返回 id + 战役对象。 */
-  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[]): { id: string; campaign: HufuCampaign }
+  /**
+   * 创建（或幂等恢复）战役；返回 id + 战役对象。
+   * opts.id 给稳定 id：同名快照存在则原样恢复（在途项重置回队列，prompt 不丢）。
+   */
+  createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[], opts?: { id?: string }): { id: string; campaign: HufuCampaign }
   /** 按 id 取战役（编程消费方：runner 等）。 */
   get(id: string): HufuCampaign | undefined
   /** 全部战役 id。 */
@@ -147,6 +153,8 @@ export interface HufuService {
   status(id: string): { open: number; queued: number; done: number; failed: number; blocked: number }
   /** 共享板路径。 */
   boardPath(id: string, group: string): string
+  /** 收尾：落终态快照并移入归档（停用活跃快照，防下个进程误恢复）。 */
+  finish(id: string): void
 }
 
 export function createHufuService(ctx: Context, subagentProvider: string): HufuService {
@@ -158,24 +166,57 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
     if (campaign === undefined) throw new Error(`hufu: unknown campaign "${id}"`)
     return campaign
   }
+
+  // ── 全量快照持久化（F18 根治）：进程强杀后按 id 幂等恢复，prompt 本体不丢 ──
+  const snapshotRoot = join(process.env.DSH_HOME ?? '.', 'storages', 'hufu-campaigns')
+  const snapshotPath = (id: string): string => join(snapshotRoot, `${id}.json`)
+  const persist = (id: string, campaign: HufuCampaign): void => {
+    try {
+      mkdirSync(snapshotRoot, { recursive: true })
+      // 原子写：崩溃恢复的用途决定了不能有"写一半"的快照。
+      const tmp = `${snapshotPath(id)}.tmp`
+      writeFileSync(tmp, JSON.stringify(campaign.serialize()))
+      renameSync(tmp, snapshotPath(id))
+    } catch { /* 落盘失败不致命（下次变更再试） */ }
+  }
+
   return {
-    createCampaign(agent, config, items) {
+    createCampaign(agent, config, items, opts = {}) {
       const holder: CampaignHolder = {}
       const ports = createHostPorts(ctx, agent, holder, subagentProvider, jisi)
-      const campaign = new HufuCampaign(config, {
-        now: () => Date.now(),
-        ...ports,
-      })
+      let campaign: HufuCampaign
+      let restored = false
+      const id = opts.id ?? `campaign-${Date.now()}`
+      if (opts.id !== undefined && existsSync(snapshotPath(opts.id))) {
+        // 幂等恢复：快照存在 → 原样重建（在途项重置回队列重派；prompt 本体在快照里）。
+        try {
+          campaign = HufuCampaign.restore(JSON.parse(readFileSync(snapshotPath(opts.id), 'utf8')), {
+            now: () => Date.now(),
+            ...ports,
+          }, { resetOpen: true })
+          restored = true
+        } catch {
+          // 快照损坏：新建空战役（宁可重来也不带着坏状态跑）。
+          campaign = new HufuCampaign(config, { now: () => Date.now(), ...ports })
+        }
+      } else {
+        campaign = new HufuCampaign(config, { now: () => Date.now(), ...ports })
+      }
       holder.campaign = campaign
-      for (const item of items) campaign.add(item)
-      const id = registry.register(campaign)
+      if (!restored) {
+        for (const item of items) campaign.add(item)
+      }
+      registry.register(campaign, id)
+      holder.mutated = () => persist(id, campaign)
       continuablesByCampaign.set(id, ports.continuables)
+      persist(id, campaign)
       return { id, campaign }
     },
     get: id => registry.get(id),
     ids: () => registry.ids(),
     enqueue(id, item) {
       require(id).add(item)
+      persist(id, require(id))
       return item.id
     },
     async dispatch(id) {
@@ -185,6 +226,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
         await campaign.dispatchNext()
         count += 1
       }
+      persist(id, campaign)
       return count
     },
     collect(id) {
@@ -204,9 +246,11 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
     },
     cancel(id, itemId, reason) {
       require(id).cancel(itemId, reason)
+      persist(id, require(id))
     },
     report(id, itemId, kind, detail) {
       require(id).report(itemId, kind, detail)
+      persist(id, require(id))
     },
     async continue(id, itemId, message) {
       const entry = continuablesByCampaign.get(id)?.get(itemId)
@@ -226,5 +270,13 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       }
     },
     boardPath: (id, group) => require(id).boardPath(group),
+    finish(id) {
+      const campaign = require(id)
+      persist(id, campaign)
+      try {
+        mkdirSync(join(snapshotRoot, 'archive'), { recursive: true })
+        renameSync(snapshotPath(id), join(snapshotRoot, 'archive', `${id}.json`))
+      } catch { /* 归档失败不致命 */ }
+    },
   }
 }

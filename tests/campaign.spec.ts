@@ -271,6 +271,28 @@ describe('HufuCampaign', () => {
     expect(restored.ledger.view('b')!.state).toBe('queued')
     expect(restored.open()).toHaveLength(1)
   })
+  it('restore with resetOpen requeues in-flight items (prompt preserved)', async () => {
+    const { campaign, tick } = makeCampaign({ concurrency: 2 })
+    campaign.add(ITEM('a'))
+    campaign.add(ITEM('b'))
+    await campaign.dispatchNext()
+    await campaign.dispatchNext()
+    tick(50)
+    campaign.report('b', 'done')
+    const data = campaign.serialize()
+    let now2 = 1000
+    const restored = HufuCampaign.restore(data, {
+      now: () => now2,
+      dispatch: { dispatch: async () => {} },
+      interrupt: { interrupt: async () => {} },
+    }, { resetOpen: true })
+    // 在途项 a：superseded 后重新入队（seed+1），prompt 本体不丢
+    expect(restored.ledger.view('a')!.state).toBe('queued')
+    expect(restored.ledger.view('a')!.seed).toBe(2)
+    expect(restored.ledger.view('a')!.item.label).toBe('a')
+    // 已终态项 b 不动
+    expect(restored.ledger.view('b')!.state).toBe('done')
+  })
 })
 
 describe('CampaignRegistry', () => {
