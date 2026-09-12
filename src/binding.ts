@@ -72,18 +72,17 @@ export function createHostPorts(
         ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
       }
       if (jisiNow !== undefined) {
-        // continuable 执行者：后台派单（子代理跨轮续战）；终态由调用方（主 agent）显式 report。
-        if (item.continuable === true) {
-          const result = jisiNow.delegate(agent, work, { ...opts, background: true })
-          continuables.set(item.id, { childId: result.ref.id, parent: agent })
-          // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
-          void result.report.then(report => {
-            if (report.status === 'failed') feed(item, report)
-          })
-          return
-        }
-        const result = jisiNow.delegate(agent, work, opts)
-        void result.report.then(report => feed(item, report))
+        // F29 推式唤醒（run 13c 实测根治）：全部执行者走 background 派单——
+        // 每个子代理 settle 的通知直达主 agent 会话上下文（与 fanout notify 同机制，
+        // v9 实测该通道在托管沙箱有效）。旧实现一次性执行者静默落账、主 agent
+        // 只能 bash sleep 轮询 collect，睡掉 92% 墙钟。
+        // 终态：失败自动落账；成功由主 agent 收到通知后 xiaochang_report 显式落账。
+        const result = jisiNow.delegate(agent, work, { ...opts, background: true })
+        continuables.set(item.id, { childId: result.ref.id, parent: agent })
+        // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
+        void result.report.then(report => {
+          if (report.status === 'failed') feed(item, report)
+        })
         return
       }
       // 回退：DSH 原生一次性子代理。注意：无集思通道时按模型覆盖会误送父路由
