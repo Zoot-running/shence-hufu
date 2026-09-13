@@ -38,6 +38,12 @@ export interface CampaignHolder {
 }
 
 /** 构造宿主端口：派单经集思（无则 DSH 原生一次性子代理）。 */
+export interface SettleEvent {
+  itemId: string
+  status: string
+  text: string
+}
+
 export function createHostPorts(
   ctx: Context,
   agent: Agent,
@@ -45,8 +51,9 @@ export function createHostPorts(
   subagentProvider: string,
   jisi: JisiLike | undefined,
   boardNamespace?: string,
-): { dispatch: DispatchPort; interrupt: InterruptPort; continuables: Map<string, { childId: string; parent: Agent }> } {
+): { dispatch: DispatchPort; interrupt: InterruptPort; continuables: Map<string, { childId: string; parent: Agent }>; settleListeners: Set<(event: SettleEvent) => void> } {
   const continuables = new Map<string, { childId: string; parent: Agent }>()
+  const settleListeners = new Set<(event: SettleEvent) => void>()
 
   const feed = (item: WorkItem, report: { status: string; text: string }): void => {
     const campaign = holder.campaign
@@ -72,16 +79,24 @@ export function createHostPorts(
         ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
       }
       if (jisiNow !== undefined) {
-        // F29 推式唤醒（run 13c 实测根治）：全部执行者走 background 派单——
-        // 每个子代理 settle 的通知直达主 agent 会话上下文（与 fanout notify 同机制，
-        // v9 实测该通道在托管沙箱有效）。旧实现一次性执行者静默落账、主 agent
-        // 只能 bash sleep 轮询 collect，睡掉 92% 墙钟。
-        // 终态：失败自动落账；成功由主 agent 收到通知后 xiaochang_report 显式落账。
-        const result = jisiNow.delegate(agent, work, { ...opts, background: true })
-        continuables.set(item.id, { childId: result.ref.id, parent: agent })
-        // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
+        // continuable 执行者：后台派单（子代理跨轮续战）；终态由调用方（主 agent）显式 report。
+        if (item.continuable === true) {
+          const result = jisiNow.delegate(agent, work, { ...opts, background: true })
+          continuables.set(item.id, { childId: result.ref.id, parent: agent })
+          // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
+          void result.report.then(report => {
+            if (report.status === 'failed') feed(item, report)
+          })
+          return
+        }
+        // 一次性执行者：report 结算时自动落账（F29 修订版）并广播 settle 事件——
+        // xiaochang_wait 订阅该事件做事件驱动等待，主 agent 不再需要 sleep 轮询。
+        const result = jisiNow.delegate(agent, work, opts)
         void result.report.then(report => {
-          if (report.status === 'failed') feed(item, report)
+          feed(item, report)
+          for (const listener of settleListeners) {
+            try { listener({ itemId: item.id, status: report.status, text: report.text }) } catch { /* 监听器异常不影响主流程 */ }
+          }
         })
         return
       }
@@ -130,7 +145,7 @@ export function createHostPorts(
     },
   }
 
-  return { dispatch, interrupt, board, continuables }
+  return { dispatch, interrupt, board, continuables, settleListeners }
 }
 
 /** ctx.hufu 服务面。 */
@@ -143,6 +158,8 @@ export interface HufuService {
   createCampaign(agent: Agent, config: CampaignConfig, items: WorkItem[], opts?: { id?: string; boardNamespace?: string }): { id: string; campaign: HufuCampaign }
   /** 按 id 取战役（编程消费方：runner 等）。 */
   get(id: string): HufuCampaign | undefined
+  /** 订阅战役内一次性执行者的 settle 事件（xiaochang_wait 的事件驱动唤醒源）。 */
+  onSettle(id: string, listener: (event: SettleEvent) => void): () => void
   /** 全部战役 id。 */
   ids(): string[]
   /** 入队一个工作项（模型/思考强度/依赖/共享板都在这里——调度语义归虎符）。 */
@@ -169,6 +186,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
   const jisi = (ctx as unknown as { get?: (name: string) => unknown }).get?.('jisi') as JisiLike | undefined
   const registry = new CampaignRegistry<HufuCampaign>()
   const continuablesByCampaign = new Map<string, Map<string, { childId: string; parent: Agent }>>()
+  const settleListenersByCampaign = new Map<string, Set<(event: SettleEvent) => void>>()
   const require = (id: string): HufuCampaign => {
     const campaign = registry.get(id)
     if (campaign === undefined) throw new Error(`hufu: unknown campaign "${id}"`)
@@ -217,6 +235,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       registry.register(campaign, id)
       holder.mutated = () => persist(id, campaign)
       continuablesByCampaign.set(id, ports.continuables)
+      settleListenersByCampaign.set(id, ports.settleListeners)
       persist(id, campaign)
       return { id, campaign }
     },
@@ -226,6 +245,12 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       require(id).add(item)
       persist(id, require(id))
       return item.id
+    },
+    onSettle(id, listener) {
+      const set = settleListenersByCampaign.get(id)
+      if (set === undefined) return () => {}
+      set.add(listener)
+      return () => set.delete(listener)
     },
     async dispatch(id) {
       const campaign = require(id)
