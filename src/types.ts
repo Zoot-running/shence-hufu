@@ -37,6 +37,21 @@ export interface WorkItem {
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */
+/** 全局解题图账本的路径条目（执行者终态结构化报告 / 分叉即时报的落账单元）。 */
+export interface KnowledgeEntry {
+  /** dead-end(已证死路) | fork(未走分叉) | observation(事实) | fact(补充事实) */
+  kind: 'dead-end' | 'fork' | 'observation' | 'fact'
+  /** 路径/分叉描述。 */
+  path: string
+  /** 结论（死路=为什么不可行；分叉=为什么可行）。 */
+  conclusion?: string
+  /** 证据/上下文（供后续派单自动携带）。 */
+  evidence?: string
+  /** 记录者与时间（审计）。 */
+  by?: string
+  at?: number
+}
+
 export interface WorkView {
   readonly item: WorkItem
   readonly state: WorkState

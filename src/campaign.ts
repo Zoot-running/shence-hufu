@@ -6,7 +6,7 @@
 
 import { InvalidTransitionError, isActive, isTerminal } from './state-machine.ts'
 import { HufuLedger } from './ledger.ts'
-import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, LedgerEvent, WorkItem, WorkView } from './types.ts'
+import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, KnowledgeEntry, LedgerEvent, WorkItem, WorkView } from './types.ts'
 
 export interface CampaignPorts {
   now(): number
@@ -30,6 +30,8 @@ function byPriority(a: WorkView, b: WorkView): number {
 
 export class HufuCampaign {
   readonly ledger = new HufuLedger()
+  /** 全局解题图账本：itemId → 路径条目（死路/未走分叉/事实）。随快照持久化。 */
+  private readonly knowledge = new Map<string, KnowledgeEntry[]>()
 
   constructor(
     readonly config: CampaignConfig,
@@ -39,6 +41,18 @@ export class HufuCampaign {
   /** 注册工作项（幂等）。 */
   add(item: WorkItem): void {
     this.ledger.register(item)
+  }
+
+  /** 落账路径条目（全局解题图）。 */
+  recordKnowledge(itemId: string, entries: KnowledgeEntry[]): void {
+    const list = this.knowledge.get(itemId) ?? []
+    list.push(...entries)
+    this.knowledge.set(itemId, list)
+  }
+
+  /** 读取某 item 的全部路径条目。 */
+  knowledgeOf(itemId: string): KnowledgeEntry[] {
+    return this.knowledge.get(itemId) ?? []
   }
 
   /** 可派单的排队项：依赖全部终态（图状事务就绪）后按优先级排序。 */
@@ -183,11 +197,12 @@ export class HufuCampaign {
   }
 
   /** 序列化（崩溃恢复 = 账本重放）。 */
-  serialize(): { config: CampaignConfig; items: WorkItem[]; dump: ReturnType<HufuLedger['dump']> } {
+  serialize(): { config: CampaignConfig; items: WorkItem[]; dump: ReturnType<HufuLedger['dump']>; knowledge: Record<string, KnowledgeEntry[]> } {
     return {
       config: this.config,
       items: this.ledger.views().map(v => v.item),
       dump: this.ledger.dump(),
+      knowledge: Object.fromEntries(this.knowledge),
     }
   }
 
@@ -199,6 +214,9 @@ export class HufuCampaign {
   ): HufuCampaign {
     const campaign = new HufuCampaign(data.config, ports)
     for (const item of data.items) campaign.ledger.register(item)
+    for (const [itemId, entries] of Object.entries(data.knowledge ?? {})) {
+      campaign.recordKnowledge(itemId, entries)
+    }
     for (const { itemId, events } of data.dump) {
       for (const event of events) campaign.ledger.append(itemId, event)
     }

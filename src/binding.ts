@@ -160,6 +160,10 @@ export interface HufuService {
   get(id: string): HufuCampaign | undefined
   /** 订阅战役内一次性执行者的 settle 事件（xiaochang_wait 的事件驱动唤醒源）。 */
   onSettle(id: string, listener: (event: SettleEvent) => void): () => void
+  /** 全局解题图：落账路径条目（死路/未走分叉/事实）。 */
+  recordKnowledge(id: string, itemId: string, entries: Array<{ kind: string; path: string; conclusion?: string; evidence?: string; by?: string; at?: number }>): void
+  /** 全局解题图：读取某 item 的全部路径条目。 */
+  knowledgeOf(id: string, itemId: string): Array<{ kind: string; path: string; conclusion?: string; evidence?: string; by?: string; at?: number }>
   /** 全部战役 id。 */
   ids(): string[]
   /** 入队一个工作项（模型/思考强度/依赖/共享板都在这里——调度语义归虎符）。 */
@@ -245,6 +249,13 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       require(id).add(item)
       persist(id, require(id))
       return item.id
+    },
+    recordKnowledge(id, itemId, entries) {
+      require(id).recordKnowledge(itemId, entries as never[])
+      persist(id, require(id))
+    },
+    knowledgeOf(id, itemId) {
+      return require(id).knowledgeOf(itemId)
     },
     onSettle(id, listener) {
       const set = settleListenersByCampaign.get(id)
