@@ -11,6 +11,13 @@
 - **心跳保活**：harness 后台任务必退出模式，结算即唤醒；
 - 并发上限：`N = 用户显式上限 ?? 自动推导（本地性能 + 模型 API 限制）`。
 
+## F33 知识账本与事件(F30 起)
+
+- **知识账本**(KnowledgeEntry): 按 item 存死路/未走分叉/事实条目(dead-end/fork/observation/fact),
+  随战役快照持久化——执行者结构化终态报告与分叉即时报的落账单元, 全局解题图的存储底座;
+- **settle 广播**(onSettle): 一次性执行者结算时向订阅方广播(宿主用其零 token 唤醒主 agent 的 xiaochang_wait);
+- **依赖 DAG**(dependsOn) + **剪枝**(cancel→blocked 终态) + **continuable 续战**。
+
 ## 边界
 
 - 不感知平台概念（hint 账本、平台 API 在 shence-yebushou@ctf）；
