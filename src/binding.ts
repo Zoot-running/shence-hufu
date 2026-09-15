@@ -266,8 +266,11 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
     async dispatch(id) {
       const campaign = require(id)
       let count = 0
-      while (campaign.freeSlots() > 0 && campaign.nextQueued().length > 0) {
-        await campaign.dispatchNext()
+      // v7：循环终止以 dispatchNext 返回 undefined 为准——类闸饱和时
+      // freeSlots()>0 但顶部排队项全部类饱和, 旧式 `freeSlots()>0 && nextQueued()` 会死转。
+      while (true) {
+        const dispatched = await campaign.dispatchNext()
+        if (dispatched === undefined) break
         count += 1
       }
       persist(id, campaign)

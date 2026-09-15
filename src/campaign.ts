@@ -22,10 +22,19 @@ function byPriority(a: WorkView, b: WorkView): number {
   if (pa !== undefined && pb !== undefined) {
     if (pa.tier !== pb.tier) return pa.tier - pb.tier
     if (pa.score !== pb.score) return pb.score - pa.score
+    return 0 // 同 tier 同 score：保注册顺序（否则会落到下面的 pa!==undefined 分支返回 -1，比较器不一致 → 顺序被打乱）
   }
   if (pa !== undefined) return -1
   if (pb !== undefined) return 1
   return 0
+}
+
+/** v7 缺省资源类：未显式指定时只受全局 concurrency 闸。 */
+export const DEFAULT_RESOURCE_CLASS = 'default'
+
+/** 工作项资源类（缺省 'default'）。 */
+export function resourceClassOf(item: WorkItem): string {
+  return item.resourceClass ?? DEFAULT_RESOURCE_CLASS
 }
 
 export class HufuCampaign {
@@ -79,12 +88,35 @@ export class HufuCampaign {
     return this.ledger.open()
   }
 
-  /** 剩余可派单槽位。 */
+  /** 剩余可派单槽位（全局闸）。 */
   freeSlots(): number {
     const budgetExpired = this.config.budgetMs !== undefined
       && this.ports.now() - (this.startedAt() ?? this.ports.now()) > this.config.budgetMs
     if (budgetExpired) return 0
     return Math.max(0, this.config.concurrency - this.open().length)
+  }
+
+  /** v7 类闸：某资源类的并发上限（未列出 → 继承全局 concurrency）。 */
+  classLimit(resourceClass: string): number {
+    return this.config.resourceLimits?.[resourceClass] ?? this.config.concurrency
+  }
+
+  /** v7 类闸：某资源类当前占用（open = 派单中/help/stalled）。 */
+  classOpen(resourceClass: string): number {
+    return this.open().filter(v => resourceClassOf(v.item) === resourceClass).length
+  }
+
+  /** v7 类闸：某资源类剩余槽位。 */
+  classFree(resourceClass: string): number {
+    return this.classLimit(resourceClass) - this.classOpen(resourceClass)
+  }
+
+  /** v7 可见性：每类 {open, limit}（主 agent 看得见哪条资源线饱和）。 */
+  classUsage(): Record<string, { open: number; limit: number }> {
+    const classes = new Set<string>([DEFAULT_RESOURCE_CLASS, ...this.ledger.views().map(v => resourceClassOf(v.item))])
+    const out: Record<string, { open: number; limit: number }> = {}
+    for (const cls of classes) out[cls] = { open: this.classOpen(cls), limit: this.classLimit(cls) }
+    return out
   }
 
   /** 战役首个事件时间戳（预算起点）。 */
@@ -95,10 +127,14 @@ export class HufuCampaign {
     return undefined
   }
 
-  /** 派单一个排队项（返回视图；无槽位/无排队返回 undefined）。 */
+  /**
+   * 派单一个排队项（返回视图；无槽位/无排队返回 undefined）。
+   * v7：两级闸——全局 freeSlots > 0 且该项资源类 classFree > 0。
+   * 类饱和时跳过该项继续往下找（无 head-of-line blocking：饱和类不堵其他类的队）。
+   */
   async dispatchNext(): Promise<WorkView | undefined> {
     if (this.freeSlots() <= 0) return undefined
-    const next = this.nextQueued()[0]
+    const next = this.nextQueued().find(v => this.classFree(resourceClassOf(v.item)) > 0)
     if (next === undefined) return undefined
     const at = this.ports.now()
     const seed = next.seed

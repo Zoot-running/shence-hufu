@@ -16,7 +16,7 @@ function makeCampaign(config: Partial<CampaignConfig> = {}) {
   const interrupt = vi.fn(async () => {})
   const board = { pathOf: (group: string) => `/boards/${group}/FINDINGS.md` }
   const campaign = new HufuCampaign(
-    { concurrency: config.concurrency ?? 2, stallAfterMs: config.stallAfterMs ?? 1000, heartbeatMs: config.heartbeatMs ?? 90_000, budgetMs: config.budgetMs },
+    { concurrency: config.concurrency ?? 2, stallAfterMs: config.stallAfterMs ?? 1000, heartbeatMs: config.heartbeatMs ?? 90_000, budgetMs: config.budgetMs, resourceLimits: config.resourceLimits },
     { now: () => now, dispatch: { dispatch }, interrupt: { interrupt }, board },
   )
   return { campaign, dispatch: { dispatch }, interrupt: { interrupt }, board, tick: (ms: number) => { now += ms } }
@@ -292,6 +292,85 @@ describe('HufuCampaign', () => {
     expect(restored.ledger.view('a')!.item.label).toBe('a')
     // 已终态项 b 不动
     expect(restored.ledger.view('b')!.state).toBe('done')
+  })
+
+  // ── v7 资源类槽位（类闸）────────────────────────────────────────
+  it('resourceClass: saturated class is skipped, other classes keep dispatching (no head-of-line blocking)', async () => {
+    const { campaign, dispatch } = makeCampaign({ concurrency: 10, resourceLimits: { container: 2, local: 10 } })
+    const item = (id: string, cls: string, tier: number): { id: string; label: string; resourceClass: string; priority: { tier: number; score: number } } => ({
+      id, label: id, resourceClass: cls, priority: { tier, score: 0 },
+    })
+    // 排队：container 项优先级更高(全是 tier 0)，local 项 tier 1
+    campaign.add(item('c1', 'container', 0))
+    campaign.add(item('c2', 'container', 0))
+    campaign.add(item('c3', 'container', 0))
+    campaign.add(item('l1', 'local', 1))
+    campaign.add(item('l2', 'local', 1))
+    await campaign.dispatchNext() // c1
+    await campaign.dispatchNext() // c2（类闸 2 满）
+    await campaign.dispatchNext() // c3 类饱和被跳过 → l1
+    await campaign.dispatchNext() // l2
+    const expectState = (id: string, state: string): void => {
+      expect(campaign.ledger.view(id)!.state).toBe(state)
+    }
+    expectState('c1', 'dispatched')
+    expectState('c2', 'dispatched')
+    expectState('c3', 'queued')
+    expectState('l1', 'dispatched')
+    expectState('l2', 'dispatched')
+    // 派单端口确实派过 l1/l2（跳过饱和类而非空转）
+    const ids = (dispatch.dispatch as ReturnType<typeof vi.fn>).mock.calls.map(c => (c[0] as { id: string }).id)
+    expect(ids).toEqual(['c1', 'c2', 'l1', 'l2'])
+    // c3 在 c2 释放后才可派
+    campaign.report('c2', 'done')
+    await campaign.dispatchNext()
+    expectState('c3', 'dispatched')
+    expect(campaign.classUsage()).toEqual({
+      container: { open: 2, limit: 2 },
+      local: { open: 2, limit: 10 },
+      default: { open: 0, limit: 10 },
+    })
+  })
+
+  it('resourceClass: unlisted class inherits global concurrency', async () => {
+    const { campaign } = makeCampaign({ concurrency: 3, resourceLimits: { container: 1 } })
+    for (const id of ['c1', 'c2']) campaign.add({ id, label: id, resourceClass: 'container' })
+    for (const id of ['x1', 'x2', 'x3']) campaign.add({ id, label: id, resourceClass: 'other' })
+    await campaign.dispatchNext() // c1（container 限 1）
+    await campaign.dispatchNext() // x1
+    await campaign.dispatchNext() // x2
+    expect(campaign.ledger.view('c2')!.state).toBe('queued')
+    expect(campaign.ledger.view('x1')!.state).toBe('dispatched')
+    expect(campaign.ledger.view('x2')!.state).toBe('dispatched')
+    expect(campaign.ledger.view('x3')!.state).toBe('queued') // 全局 3 闸
+    expect(campaign.classLimit('other')).toBe(3)
+  })
+
+  it('resourceClass: default class when unspecified + global gate still binds', async () => {
+    const { campaign } = makeCampaign({ concurrency: 2, resourceLimits: { container: 1 } })
+    for (const id of ['a', 'b', 'c']) campaign.add({ id, label: id })
+    await campaign.dispatchNext()
+    await campaign.dispatchNext()
+    await campaign.dispatchNext() // undefined: 全局闸 2
+    expect(campaign.ledger.view('a')!.state).toBe('dispatched')
+    expect(campaign.ledger.view('b')!.state).toBe('dispatched')
+    expect(campaign.ledger.view('c')!.state).toBe('queued')
+  })
+
+  it('resourceClass: serialize + restore preserves limits and item classes', async () => {
+    const { campaign, tick } = makeCampaign({ concurrency: 10, resourceLimits: { container: 3 } })
+    campaign.add({ id: 'a', label: 'a', resourceClass: 'container' })
+    await campaign.dispatchNext()
+    tick(50)
+    const data = campaign.serialize()
+    const restored = HufuCampaign.restore(data, {
+      now: () => 1000,
+      dispatch: { dispatch: async () => {} },
+      interrupt: { interrupt: async () => {} },
+    })
+    expect(restored.classLimit('container')).toBe(3)
+    expect(restored.ledger.view('a')!.item.resourceClass).toBe('container')
+    expect(restored.classFree('container')).toBe(2)
   })
 })
 

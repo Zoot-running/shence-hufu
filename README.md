@@ -9,7 +9,8 @@
 - **工作项账本**：终态处理、重复报告去重、调度级崩溃恢复（账本回放）；
 - **stall 重派**：seed 多样性；
 - **心跳保活**：harness 后台任务必退出模式，结算即唤醒；
-- 并发上限：`N = 用户显式上限 ?? 自动推导（本地性能 + 模型 API 限制）`。
+- 并发上限：`N = 用户显式上限 ?? 自动推导（本地性能 + 模型 API 限制）`；
+- **资源类槽位（v7）**：`WorkItem.resourceClass` + `CampaignConfig.resourceLimits` 两级闸（全局 concurrency × 每类上限）——饱和类被跳过、不堵其他类的队（无 head-of-line blocking）；`classUsage()` 透出每类饱和度；未列出的类继承全局上限（向后兼容）。
 
 ## F33 知识账本与事件(F30 起)
 

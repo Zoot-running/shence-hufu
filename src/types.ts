@@ -34,6 +34,8 @@ export interface WorkItem {
   readonly board?: string
   /** 可选：continuable 执行者——同一子代理跨轮续战（保留原生上下文），终态由调用方显式 report。 */
   readonly continuable?: boolean
+  /** 可选：资源类（v7 类闸）。缺省 'default'（只受全局 concurrency 闸）。 */
+  readonly resourceClass?: string
 }
 
 /** 工作项运行时视图（由账本事件折叠而来）。 */
@@ -88,6 +90,11 @@ export interface CampaignConfig {
   heartbeatMs: number
   /** 可选战役预算（毫秒）；到期后 remaining 视为停止派单。 */
   budgetMs?: number
+  /**
+   * v7 类闸：每资源类独立并发上限。未列出的类继承 concurrency（只受全局闸）。
+   * 两级闸共同作用：全局 freeSlots + 类 freeSlots 都 > 0 才可派。
+   */
+  resourceLimits?: Record<string, number>
 }
 
 /** 共享板端口：并行工人互相联系的泛化信道（宿主绑定给出路径；工人自行读写文件）。 */
