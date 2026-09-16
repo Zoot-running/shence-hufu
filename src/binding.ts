@@ -21,6 +21,7 @@ interface JisiLike {
     provider?: string
     reasoningEffort?: string
     background?: boolean
+    signal?: AbortSignal
   }): { ref: { id: string }; report: Promise<{ status: 'completed' | 'failed' | 'blocked'; text: string }> }
   continue(parent: Agent, childId: string, message: string): Promise<void>
 }
@@ -54,6 +55,9 @@ export function createHostPorts(
 ): { dispatch: DispatchPort; interrupt: InterruptPort; continuables: Map<string, { childId: string; parent: Agent }>; settleListeners: Set<(event: SettleEvent) => void> } {
   const continuables = new Map<string, { childId: string; parent: Agent }>()
   const settleListeners = new Set<(event: SettleEvent) => void>()
+  /** v7.5: 每 item 一个中止控制器——剪枝/超时判负时 abort 掉在途执行者(题已解不再空烧 token)。 */
+  const aborters = new Map<string, AbortController>()
+  const logger = ctx.logger
 
   const feed = (item: WorkItem, report: { status: string; text: string }): void => {
     const campaign = holder.campaign
@@ -73,8 +77,12 @@ export function createHostPorts(
       // apply 时拿到 undefined 后永远走无 provider 回退（模型误送父路由）。
       const jisiNow = jisi ?? (ctx as unknown as { get?: (name: string) => unknown }).get?.('jisi') as JisiLike | undefined
       const work = { prompt: item.label }
+      // v7.5: 每次派单独立 AbortController——interrupt 端口 abort 它即可真杀执行者。
+      const controller = new AbortController()
+      aborters.set(item.id, controller)
       const opts = {
         background: false as const,
+        signal: controller.signal,
         ...(item.model !== undefined ? { model: item.model } : {}),
         ...(item.reasoningEffort !== undefined ? { reasoningEffort: item.reasoningEffort } : {}),
       }
@@ -85,6 +93,7 @@ export function createHostPorts(
           continuables.set(item.id, { childId: result.ref.id, parent: agent })
           // 启动失败要显式落账；成功则保持 dispatched，等主 agent 判断后 report。
           void result.report.then(report => {
+            aborters.delete(item.id)
             if (report.status === 'failed') feed(item, report)
           })
           return
@@ -93,6 +102,7 @@ export function createHostPorts(
         // xiaochang_wait 订阅该事件做事件驱动等待，主 agent 不再需要 sleep 轮询。
         const result = jisiNow.delegate(agent, work, opts)
         void result.report.then(report => {
+          aborters.delete(item.id)
           feed(item, report)
           for (const listener of settleListeners) {
             try { listener({ itemId: item.id, status: report.status, text: report.text }) } catch { /* 监听器异常不影响主流程 */ }
@@ -103,6 +113,7 @@ export function createHostPorts(
       // 回退：DSH 原生一次性子代理。注意：无集思通道时按模型覆盖会误送父路由
       // （provider 无法解析）——模型覆盖必须响亮失败而非盲派。
       if (item.model !== undefined) {
+        aborters.delete(item.id)
         feed(item, { status: 'failed', text: `[no-jisi-channel] 模型覆盖 ${item.model} 需要集思通道（jisi 未装载），拒绝盲派` })
         return
       }
@@ -110,12 +121,13 @@ export function createHostPorts(
         label: `hufu-${item.id}`,
         prompt: [{ type: 'text', text: item.label }] as ContentBlock[],
         parent: agent,
-        signal: new AbortController().signal,
+        signal: controller.signal,
         ...(item.reasoningEffort !== undefined ? {
           agentOptions: { reasoningEffort: item.reasoningEffort },
         } : {}),
       })
       void run.then(async (r) => {
+        aborters.delete(item.id)
         const result = await r.result
         void settleRun(r)
         feed(item, {
@@ -127,10 +139,17 @@ export function createHostPorts(
   }
 
   const interrupt: InterruptPort = {
-    async interrupt(item, seed) {
-      // v1：宿主中断（interrupt_agent）在工具层不可达；打日志并依赖重派 seed 隔离。
-      const logger = ctx.logger
-      if (logger !== undefined) logger('hufu').info(`interrupt requested for ${item.id}#${seed} (no-op in v1 binding)`)
+    async interrupt(item, _seed) {
+      // v7.5: 真杀——abort 该 item 的 AbortController, 在途执行者立刻停(不再空烧 token);
+      // 已结算(aborters 已删)则 no-op。子代理中止后其 report 会以 failed/中断结算并被账本吸收。
+      const controller = aborters.get(item.id)
+      if (controller !== undefined) {
+        controller.abort()
+        aborters.delete(item.id)
+        logger?.('hufu').info(`interrupt ${item.id}: executor aborted`)
+      } else {
+        logger?.('hufu').info(`interrupt ${item.id}: no live executor (already settled)`)
+      }
     },
   }
 

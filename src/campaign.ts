@@ -180,6 +180,16 @@ export class HufuCampaign {
   }
 
   /**
+   * v7.5: 请求中止某在途项的执行者进程(剪枝/超时判负时"真杀"——题已解同题执行者不再空烧 token)。
+   * 仅对活跃项生效; 宿主端口幂等(已结算的子代理 abort 是 no-op)。
+   */
+  async interruptItem(itemId: string): Promise<void> {
+    const view = this.ledger.view(itemId)
+    if (view === undefined || !isActive(view.state)) return
+    await this.ports.interrupt.interrupt(view.item, view.seed)
+  }
+
+  /**
    * stall 检测：超过 stallAfterMs 无进展 → 标记 stall；
    * 若 redispatchRequested 为假 → supersede + requeue（seed+1），并中断旧 seed。
    */

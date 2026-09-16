@@ -357,6 +357,23 @@ describe('HufuCampaign', () => {
     expect(campaign.ledger.view('c')!.state).toBe('queued')
   })
 
+  it('v7.5 interruptItem: calls the interrupt port only for active items', async () => {
+    const { campaign, interrupt, dispatch } = makeCampaign({ concurrency: 4 })
+    campaign.add(ITEM('a'))
+    campaign.add(ITEM('b'))
+    await campaign.dispatchNext() // a → dispatched
+    await campaign.interruptItem('a')
+    await campaign.interruptItem('b') // b queued → 不触发中断端口
+    await campaign.interruptItem('zzz') // 未知 item → 不触发
+    expect(interrupt.interrupt).toHaveBeenCalledTimes(1)
+    const item = (interrupt.interrupt as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { id: string }
+    expect(item.id).toBe('a')
+    // 终态后也不再触发(幂等)
+    campaign.report('a', 'done')
+    await campaign.interruptItem('a')
+    expect(interrupt.interrupt).toHaveBeenCalledTimes(1)
+  })
+
   it('resourceClass: serialize + restore preserves limits and item classes', async () => {
     const { campaign, tick } = makeCampaign({ concurrency: 10, resourceLimits: { container: 3 } })
     campaign.add({ id: 'a', label: 'a', resourceClass: 'container' })
