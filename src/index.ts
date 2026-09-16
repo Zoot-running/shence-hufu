@@ -17,6 +17,7 @@ export { HufuCampaign } from './campaign.ts'
 export { HufuLedger } from './ledger.ts'
 export { CampaignRegistry } from './registry.ts'
 export { InvalidTransitionError, isActive, isTerminal, transition } from './state-machine.ts'
+export { ResourceQueue } from './resource-queue.ts'
 export type * from './types.ts'
 
 export const name = 'shence-hufu'

@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { settleRun } from '@deepseek-ai/dsh-subagent'
 import { HufuCampaign } from './campaign.ts'
 import { CampaignRegistry } from './registry.ts'
+import { ResourceQueue, type ResourceQueueConfig } from './resource-queue.ts'
 import type { BoardPort, CampaignConfig, DispatchPort, InterruptPort, WorkItem } from './types.ts'
 
 interface JisiLike {
@@ -201,6 +202,8 @@ export interface HufuService {
   status(id: string): { open: number; queued: number; done: number; failed: number; blocked: number }
   /** 共享板路径。 */
   boardPath(id: string, group: string): string
+  /** v7.6: 通用竞争资源队列原语(FIFO/同 holder 合并/单一授权点; canGrant/grant 由使用方注入)。 */
+  resourceQueue(config: ResourceQueueConfig): ResourceQueue
   /** 收尾：落终态快照并移入归档（停用活跃快照，防下个进程误恢复）。 */
   finish(id: string): void
 }
@@ -336,6 +339,7 @@ export function createHufuService(ctx: Context, subagentProvider: string): HufuS
       }
     },
     boardPath: (id, group) => require(id).boardPath(group),
+    resourceQueue: (config: ResourceQueueConfig) => new ResourceQueue(config),
     finish(id) {
       const campaign = require(id)
       persist(id, campaign)
